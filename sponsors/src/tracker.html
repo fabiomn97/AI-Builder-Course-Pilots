@@ -930,6 +930,7 @@ function renderSheet() {
       <div class="grid2">
         <label class="fl"><span>To</span><select class="f" id="d-to">${opt([["", "Choose a contact"], ...(r.contacts || []).map(c => [c.name, c.name])], draftContact(r)?.name || "")}</select></label>
         <label class="fl"><span>Your name</span><input class="f" id="d-me" placeholder="Signs the email" value="${esc(prefs.me || "")}"></label>
+        <label class="fl full"><span class="with-link">Template${prefs.draftTpl?.[openId] ? "" : ` <span class="sugg" style="color:var(--ink-3)">picked automatically</span>`}</span><select class="f" id="d-tpl">${opt(TEMPLATES, draftTemplate(r))}</select></label>
       </div>
       <label class="fl"><span class="sr">Draft</span><textarea class="f draft" id="d-text" spellcheck="true">${esc(drafts[openId] ?? draftEmail(r))}</textarea></label>
       <div class="row-btns"><button class="btn sm" type="button" data-act="regen">Rebuild draft</button><button class="btn sm primary" type="button" data-act="copy-draft">Copy email</button></div>
@@ -1007,32 +1008,87 @@ function draftContact(r) {
   if (want === "") return null;
   return cs.find(c => c.name === want) || cs[0] || null;
 }
+/* Three outreach templates, picked from what we know about the company:
+   renewal = sponsored the 2026 Summit; warm = showed interest, joined a 2026 event, or backs another
+   MIT conference; cold = everyone else, including companies that never replied or declined. */
+const TEMPLATES = [["renewal", "Renewal · 2026 sponsor"], ["warm", "Warm · prior interest or other MIT events"], ["cold", "Cold · new or no reply"]];
+function autoTemplate(r) {
+  if (r.s26Status === "Confirmed") return "renewal";
+  if (r.s26Status === "Received Interest" || r.s26Status === "Negotiation" || r.warm) return "warm";
+  return "cold";
+}
+const draftTemplate = r => prefs.draftTpl?.[openId] || autoTemplate(r);
+function warmOpener(r, co) {
+  const w = r.warm || "";
+  if (r.s26Status === "Received Interest" || r.s26Status === "Negotiation")
+    return `Last year you and our team talked about ${co} getting involved with the MIT Sloan Tech Summit. I'm picking that conversation back up for 2027, early enough to shape something that fits your plans.`;
+  if (/networking night/i.test(w))
+    return `Thank you for joining our 2026 Networking Night at MIT Sloan. I'm reaching out early about the 2027 Summit because I'd love to give ${co} a bigger role this year.`;
+  if (/^2026/.test(w) && !/conf|conference|symposium|analytics|ai conference/i.test(w))
+    return `Thank you for being part of the 2026 MIT Sloan Tech Summit. I'm reaching out early about 2027 because I'd love to give ${co} a bigger role this year.`;
+  const event = w.replace(/\s*\b(sponsor|participant|speaker|partner|workshop)\b.*$/i, "").replace(/\bConf\.?/, "Conference").replace(/^\d{4}\s+/, "").trim();
+  return event
+    ? `${co} has been a great supporter of the ${event}, and I wanted to thank you for backing MIT student events. I'm leading sponsorships for the MIT Sloan Tech Summit 2027 and think it's a natural next step.`
+    : `${co} has supported MIT student events before, and I'm leading sponsorships for the MIT Sloan Tech Summit 2027, which I think is a natural next step.`;
+}
+function coldOpener(r) {
+  if (r.s26Status === "Declined") return "I know the timing didn't work last year. Budgets and priorities change, so I wanted to check in early for 2027.\n\n";
+  if (r.s26Status === "Ghosted" || r.s26Status === "Outreach Sent") return "I reached out last year about the MIT Sloan Tech Summit and know inboxes get busy, so I'll keep this short.\n\n";
+  return "";
+}
 function draftEmail(r) {
   const c = draftContact(r);
-  const first = c && c.name ? c.name.split(/\s+/)[0] : "there";
+  const first = c && c.name && !/^LinkedIn:/.test(c.name) ? c.name.split(/\s+/)[0] : "there";
   const me = prefs.me || "[Your name]";
   const co = r.name.replace(/\s*\(.*?\)\s*/g, " ").trim();
   const angle = r.angle || "put your team in front of MIT's next generation of product, strategy and AI leaders";
   const speakers = [["cerebras", "Andrew Feldman (Cerebras)"], ["hubspot", "HubSpot co-founder Dharmesh Shah"], ["google", "Carol Walport of Google DeepMind"]]
     .filter(([k]) => !co.toLowerCase().includes(k)).slice(0, 2).map(x => x[1]).join(" and ");
-  const thanks = r.s26Status === "Confirmed" ? ` Thank you again for sponsoring it.` : /2026/.test(r.warm || "") ? ` Thank you again for being part of it.` : "";
-  return `Subject: ${co} × MIT Sloan Tech Summit 2027
+  const tierLine = r.tier && TIER_BY[r.tier] ? ` Our ${r.tier} package ($${TIER_BY[r.tier].price.toLocaleString("en-US")}) could be a natural starting point.` : "";
+  const sign = `Best,\n${me}\nMBA Candidate, MIT Sloan School of Management`;
+  const recap = `"Bottlenecks to Breakthroughs: Building AI at Scale" brought MIT graduate students, founders and operators together for two days of talks, an AI hackathon and a Networking Night with 677 registrants`;
+  const tpl = draftTemplate(r);
+
+  if (tpl === "renewal") {
+    const was = r.s26Tier ? ` as a ${r.s26Tier} sponsor` : "";
+    return `Subject: Thank you, and an early invitation to Tech Summit 2027
 
 Hi ${first},
 
-I'm ${me}, an MBA student at MIT Sloan and part of the team organizing the 2027 MIT Sloan Tech Summit, the largest student-run conference at MIT.
+Thank you again for ${co}'s support of the 2026 MIT Sloan Tech Summit${was}. Your partnership helped make it happen: ${recap}.
 
-Our 2026 edition, "Bottlenecks to Breakthroughs: Building AI at Scale," brought together MIT graduate students, founders and operators, with speakers including ${speakers}, plus an AI hackathon and a networking night with 677 registrants.${thanks}
+I'm ${me}, leading sponsorships for the 2027 Summit [dates]. Before we open partnerships more widely, I wanted to come to our 2026 sponsors first and hear what worked for your team and what you'd want more of this year, whether that's recruiting time with MBAs, a speaking slot, or a hands-on session like the hackathon.
 
-I'm reaching out because a partnership would let ${co} ${angle}.
+Would you be open to a 20-minute call in the next two weeks? I'm happy to send the 2027 packages ahead of time.
 
-Packages run from $2,000 to $25,000, covering recruiting tables and resume book access up to keynote and panel slots with marquee branding${r.tier && TIER_BY[r.tier] ? `. Our ${r.tier} package ($${TIER_BY[r.tier].price.toLocaleString("en-US")}) could be a natural starting point` : ""}. I'd be glad to share the deck and shape a package around what matters most to your team.
+${sign}`;
+  }
+  if (tpl === "warm") {
+    return `Subject: ${co} × MIT Sloan Tech Summit 2027
 
-Would you have 20 minutes in the next two weeks?
+Hi ${first},
 
-Best,
-${me}
-MBA Candidate, MIT Sloan School of Management`;
+${warmOpener(r, co)}
+
+The Tech Summit is the largest student-run conference at MIT. Our 2026 edition, "Bottlenecks to Breakthroughs: Building AI at Scale," brought MIT graduate students, founders and operators together for two days of talks, an AI hackathon and a Networking Night with 677 registrants. Speakers included ${speakers}.
+
+A partnership would let ${co} ${angle}. Packages run from $2,000 to $25,000, from recruiting tables and resume book access up to keynote and panel slots.${tierLine}
+
+Could we find 20 minutes in the next two weeks? I can send the deck beforehand.
+
+${sign}`;
+  }
+  return `Subject: MIT Sloan Tech Summit 2027: partnering with ${co}?
+
+Hi ${first},
+
+${coldOpener(r)}I'm ${me}, an MBA student leading sponsorships for the MIT Sloan Tech Summit, the largest student-run conference at MIT. Our 2026 edition focused on building AI at scale: speakers included ${speakers}, alongside an AI hackathon and a Networking Night with 677 registrants.
+
+I think a partnership would let ${co} ${angle}. Packages start at $2,000 and go up to keynote slots and premier branding.
+
+Would a one-page overview be useful? And if someone else on your team handles university or event partnerships, I'd be grateful for a pointer.
+
+${sign}`;
 }
 
 /* ——— new company modal ——— */
@@ -1356,6 +1412,7 @@ $("#sheet").addEventListener("input", e => {
 });
 $("#sheet").addEventListener("change", e => {
   const el = e.target;
+  if (el.id === "d-tpl") { const r = items.get(openId); prefs.draftTpl = { ...(prefs.draftTpl || {}) }; if (el.value === autoTemplate(r)) delete prefs.draftTpl[openId]; else prefs.draftTpl[openId] = el.value; savePrefs(); delete drafts[openId]; $("#d-text").value = draftEmail(r); }
   if (el.id === "d-to") { prefs.draftTo = { ...(prefs.draftTo || {}), [openId]: el.value }; savePrefs(); delete drafts[openId]; $("#d-text").value = draftEmail(items.get(openId)); }
   if (el.dataset.f === "status" && el.value === "contacted") {
     const r = items.get(openId); if (r && !r.lastContact) { const d = new Date(); const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; patchItem(openId, { lastContact: iso }, { immediate: true }); const lc = $("#e-lastContact"); if (lc) lc.value = iso; }
